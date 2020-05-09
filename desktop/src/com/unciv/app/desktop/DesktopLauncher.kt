@@ -8,8 +8,23 @@ import com.badlogic.gdx.backends.lwjgl.LwjglApplication
 import com.badlogic.gdx.backends.lwjgl.LwjglApplicationConfiguration
 import com.badlogic.gdx.graphics.Texture
 import com.badlogic.gdx.tools.texturepacker.TexturePacker
+import com.badlogic.gdx.utils.Json
+import com.sun.org.apache.xalan.internal.xsltc.compiler.util.Type.Text
 import com.unciv.UncivGame
+import com.unciv.logic.map.MapParameters
+import com.unciv.models.metadata.GameParameters
 import com.unciv.models.translations.tr
+import io.ktor.application.call
+import io.ktor.http.ContentType
+import io.ktor.http.HttpStatusCode
+import io.ktor.request.receiveText
+import io.ktor.response.respond
+import io.ktor.response.respondText
+import io.ktor.routing.get
+import io.ktor.routing.post
+import io.ktor.routing.routing
+import io.ktor.server.engine.embeddedServer
+import io.ktor.server.netty.Netty
 import java.io.File
 import java.util.*
 import kotlin.concurrent.timer
@@ -21,6 +36,7 @@ internal object DesktopLauncher {
 
     @JvmStatic
     fun main(arg: Array<String>) {
+        startMultiplayerServer()
 
         packImages()
 
@@ -38,6 +54,41 @@ internal object DesktopLauncher {
             tryActivateDiscord(game)
 
         LwjglApplication(game, config)
+    }
+
+    private fun startMultiplayerServer() {
+        class NewGameInfo(var gameParameters: GameParameters, var mapParameters: MapParameters)
+        val games = HashMap<String,NewGameInfo>()
+        embeddedServer(Netty, 8080) {
+            routing {
+                get("/getGame/{gameName}") {
+                    val gameName = call.parameters["gameName"]
+                    if(!games.containsKey(gameName)) call.respond(HttpStatusCode.NotFound,
+                            "Game with the name $gameName does not exist")
+                    else call.respondText(Json().toJson(games[gameName]))
+                }
+                get("/getGameNames"){
+                    call.respondText(Json().toJson(games.keys.toList()))
+                }
+                post("/addNewGame/{gameName}") {
+                    val gameName = call.parameters["gameName"]!!
+                    if (games.containsKey(gameName)) {
+                        call.respond(HttpStatusCode.NotAcceptable, "A game with the name $gameName already exists")
+                        return@post
+                    }
+                    val body = call.receiveText()
+                    val newGameInfo:NewGameInfo
+                    try{
+                        newGameInfo = Json().apply { ignoreUnknownFields }.fromJson(NewGameInfo::class.java, body)
+                    }
+                    catch (ex:Exception){
+                        call.respond(HttpStatusCode.NotAcceptable, "Could not deserialize json")
+                        return@post
+                    }
+                    games[gameName] = newGameInfo
+                }
+            }
+        }.start()
     }
 
     private fun packImages() {
